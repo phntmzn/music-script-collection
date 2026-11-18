@@ -10,52 +10,146 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
+#include <random>
 #include <cstdint>
+#include <array>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 namespace fs = std::filesystem;
 
-struct Chord {
+constexpr int BPM = 122;
+constexpr int PPQ = 480;
+constexpr int BAR = PPQ * 4;
+constexpr int TOTAL = 1000;
+
+struct Key {
     string name;
-    vector<int> notes;
+    string folder;
+    int root;
+    int signature;
+    bool flats;
 };
 
-int main() {
+struct Chord {
+    string name;
+    int degree;
+    vector<int> intervals;
+};
 
-    // D minor key signature
-    const int BPM = 122;
-    const int PPQ = 480;
-    const int BAR = PPQ * 4;
+struct Event {
+    int tick;
+    int priority;
+    vector<unsigned char> data;
+};
 
-    // Dm - Dm9 - Bbmaj7 - Fmaj7 - Cadd9
-    vector<Chord> chords = {
-        {"Dm",     {50, 53, 57}},
-        {"Dm9",    {50, 53, 57, 60, 64}},
-        {"Bbmaj7", {46, 50, 53, 57}},
-        {"Fmaj7",  {41, 45, 48, 52}},
-        {"Cadd9",  {48, 52, 55, 62}}
+// 12 minor keys and their MIDI key signatures.
+vector<Key> keys = {
+    {"A Minor",       "A_Minor",       9,   0, false},
+    {"Bb Minor",      "Bb_Minor",     10,  -5, true},
+    {"B Minor",       "B_Minor",      11,   2, false},
+    {"C Minor",       "C_Minor",       0,  -3, true},
+    {"C# Minor",      "CSharp_Minor",  1,   4, false},
+    {"D Minor",       "D_Minor",       2,  -1, true},
+    {"Eb Minor",      "Eb_Minor",      3,  -6, true},
+    {"E Minor",       "E_Minor",       4,   1, false},
+    {"F Minor",       "F_Minor",       5,  -4, true},
+    {"F# Minor",      "FSharp_Minor",  6,   3, false},
+    {"G Minor",       "G_Minor",       7,  -2, true},
+    {"Ab Minor",      "Ab_Minor",      8,  -7, true}
+};
+
+const int scale[] = {
+    0, 2, 3, 5, 7, 8, 10
+};
+
+vector<Chord> chordTypes = {
+    {"m9",    0, {0, 3, 7, 10, 14}},
+    {"m7b5",  1, {0, 3, 6, 10}},
+    {"maj9",  2, {0, 4, 7, 11, 14}},
+    {"m9",    3, {0, 3, 7, 10, 14}},
+    {"m7",    4, {0, 3, 7, 10}},
+    {"maj9",  5, {0, 4, 7, 11, 14}},
+    {"7",     6, {0, 4, 7, 10}}
+};
+
+const vector<vector<int>> progressions = {
+    {0, 5, 2, 6},
+    {0, 3, 5, 4},
+    {0, 6, 3, 4},
+    {5, 3, 0, 6},
+    {0, 2, 5, 3},
+    {0, 3, 6, 5},
+    {0, 5, 3, 4},
+    {0, 4, 3, 6},
+    {5, 0, 6, 3},
+    {0, 1, 5, 6},
+    {0, 3, 2, 6},
+    {5, 6, 0, 3}
+};
+
+const string sharpNames[] = {
+    "C", "C#", "D", "D#", "E", "F",
+    "F#", "G", "G#", "A", "A#", "B"
+};
+
+const string flatNames[] = {
+    "C", "Db", "D", "Eb", "E", "F",
+    "Gb", "G", "Ab", "A", "Bb", "B"
+};
+
+string chordName(const Key& key, int degree) {
+
+    int pc = (key.root + scale[degree]) % 12;
+
+    string root = key.flats
+        ? flatNames[pc]
+        : sharpNames[pc];
+
+    return root + chordTypes[degree].name;
+}
+
+// MIDI variable-length quantity.
+void vlq(vector<unsigned char>& out, int value) {
+
+    unsigned char buffer[4];
+    int count = 0;
+
+    buffer[count++] = value & 0x7F;
+
+    while ((value >>= 7)) {
+        buffer[count++] = (value & 0x7F) | 0x80;
+    }
+
+    while (count--) {
+        out.push_back(buffer[count]);
+    }
+}
+
+// Write big-endian integer.
+void write32(ofstream& file, uint32_t value) {
+
+    unsigned char bytes[] = {
+        (unsigned char)(value >> 24),
+        (unsigned char)(value >> 16),
+        (unsigned char)(value >> 8),
+        (unsigned char)value
     };
 
-    // Create output folder
-    fs::path folder = "DeepHouseMIDI/D_Minor";
+    file.write((char*)bytes, 4);
+}
 
-    fs::create_directories(folder);
-
-    string filename =
-        "Dm - Dm9 - Bbmaj7 - Fmaj7 - Cadd9.mid";
-
-    fs::path output = folder / filename;
-
-    // MIDI events: absolute tick, priority, message
-    struct Event {
-        int tick;
-        int priority;
-        vector<unsigned char> data;
-    };
+// Generate one MIDI file.
+void generate(
+    const Key& key,
+    const vector<int>& progression,
+    int index
+) {
 
     vector<Event> events;
 
-    // Tempo: 122 BPM
+    // Tempo metadata.
     int tempo = 60000000 / BPM;
 
     events.push_back({
@@ -66,71 +160,106 @@ int main() {
          (unsigned char)tempo}
     });
 
-    // Key signature: D minor = 1 flat, minor
+    // Key signature metadata.
     events.push_back({
         0, 1,
-        {0xFF, 0x59, 0x02, 0xFF, 0x01}
+        {0xFF, 0x59, 0x02,
+         (unsigned char)(int8_t)key.signature,
+         0x01}
     });
 
-    // Time signature: 4/4
+    // Time signature: 4/4.
     events.push_back({
         0, 2,
-        {0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08}
+        {0xFF, 0x58, 0x04, 4, 2, 24, 8}
     });
 
-    // Generate chord progression
-    for (int bar = 0; bar < chords.size(); ++bar) {
+    // Track name.
+    string trackName = key.name + " Deep House";
+
+    vector<unsigned char> trackMeta = {
+        0xFF, 0x03,
+        (unsigned char)trackName.size()
+    };
+
+    trackMeta.insert(
+        trackMeta.end(),
+        trackName.begin(),
+        trackName.end()
+    );
+
+    events.push_back({0, 3, trackMeta});
+
+    string progressionName;
+
+    // Generate four chords.
+    for (int bar = 0; bar < 4; ++bar) {
+
+        int degree = progression[bar];
+
+        string name = chordName(key, degree);
+
+        if (bar)
+            progressionName += "-";
+
+        progressionName += name;
 
         int start = bar * BAR;
-        int end = start + BAR;
+        int end = start + BAR - 120;
 
-        cout << chords[bar].name << " ";
+        // Chord marker metadata.
+        vector<unsigned char> marker = {
+            0xFF, 0x06,
+            (unsigned char)name.size()
+        };
 
-        for (int note : chords[bar].notes) {
+        marker.insert(
+            marker.end(),
+            name.begin(),
+            name.end()
+        );
 
+        events.push_back({start, 3, marker});
+
+        int root = 48 + (key.root + scale[degree]) % 12;
+
+        for (int interval : chordTypes[degree].intervals) {
+
+            int note = root + interval;
+
+            // Note on.
             events.push_back({
-                start, 4,
-                {0x90, (unsigned char)note, 90}
+                start, 5,
+                {0x90, (unsigned char)note, 88}
             });
 
+            // Note off.
             events.push_back({
-                end, 3,
+                end, 4,
                 {0x80, (unsigned char)note, 0}
             });
         }
     }
 
-    // Sort events by timestamp
-    stable_sort(events.begin(), events.end(),
+    // Sort events chronologically.
+    stable_sort(
+        events.begin(),
+        events.end(),
         [](const Event& a, const Event& b) {
-            return a.tick < b.tick;
+            if (a.tick != b.tick)
+                return a.tick < b.tick;
+
+            return a.priority < b.priority;
         }
     );
 
     vector<unsigned char> track;
 
-    // Variable-length MIDI encoding
-    auto vlq = [&](int value) {
-
-        unsigned char buffer[4];
-        int count = 0;
-
-        buffer[count++] = value & 0x7F;
-
-        while ((value >>= 7)) {
-            buffer[count++] = (value & 0x7F) | 0x80;
-        }
-
-        while (count--) {
-            track.push_back(buffer[count]);
-        }
-    };
-
     int previous = 0;
 
     for (const auto& event : events) {
 
-        vlq(event.tick - previous);
+        vlq(track, event.tick - previous);
 
         track.insert(
             track.end(),
@@ -141,52 +270,99 @@ int main() {
         previous = event.tick;
     }
 
-    // End of track
-    track.insert(track.end(), {
-        0x00, 0xFF, 0x2F, 0x00
-    });
+    // End of track.
+    track.insert(
+        track.end(),
+        {0x00, 0xFF, 0x2F, 0x00}
+    );
 
-    // Write MIDI file
-    ofstream out(output, ios::binary);
+    // Create key folder.
+    fs::path folder =
+        fs::path("DeepHouseMIDI") / key.folder;
 
-    if (!out) {
-        cerr << "Could not create MIDI file.\n";
-        return 1;
+    fs::create_directories(folder);
+
+    // Filename.
+    ostringstream filename;
+
+    filename
+        << "DeepHouse_"
+        << setw(4) << setfill('0') << index
+        << "_" << progressionName
+        << ".mid";
+
+    fs::path output = folder / filename.str();
+
+    ofstream file(output, ios::binary);
+
+    if (!file) {
+        cerr << "Error creating: " << output << endl;
+        return;
     }
 
-    // MIDI header
-    out.write("MThd", 4);
+    // MIDI header: format 0, one track, 480 PPQ.
+    file.write("MThd", 4);
+    write32(file, 6);
 
     unsigned char header[] = {
-        0, 0, 0, 6,
-        0, 0, 0, 1,
+        0, 0,
+        0, 1,
         (unsigned char)(PPQ >> 8),
         (unsigned char)PPQ
     };
 
-    out.write((char*)header, sizeof(header));
+    file.write((char*)header, 6);
 
-    // MIDI track
-    out.write("MTrk", 4);
+    // MIDI track.
+    file.write("MTrk", 4);
+    write32(file, track.size());
 
-    uint32_t size = track.size();
+    file.write(
+        (char*)track.data(),
+        track.size()
+    );
 
-    unsigned char length[] = {
-        (unsigned char)(size >> 24),
-        (unsigned char)(size >> 16),
-        (unsigned char)(size >> 8),
-        (unsigned char)size
-    };
+    file.close();
 
-    out.write((char*)length, 4);
-    out.write((char*)track.data(), track.size());
+    cout << index << "/1000  "
+         << key.name << "  "
+         << progressionName << endl;
+}
 
-    out.close();
+int main() {
 
-    cout << "\n\nKey: D Minor";
-    cout << "\nTempo: " << BPM << " BPM";
-    cout << "\nTime Signature: 4/4";
-    cout << "\nSaved: " << output << endl;
+    fs::create_directories("DeepHouseMIDI");
+
+    random_device rd;
+    mt19937 rng(rd());
+
+    uniform_int_distribution<int> keyDist(
+        0, keys.size() - 1
+    );
+
+    uniform_int_distribution<int> progressionDist(
+        0, progressions.size() - 1
+    );
+
+    cout << "\nGENERATING 1000 DEEP HOUSE MIDI FILES\n\n";
+
+    for (int i = 1; i <= TOTAL; ++i) {
+
+        const Key& key = keys[keyDist(rng)];
+
+        const auto& progression =
+            progressions[progressionDist(rng)];
+
+        generate(key, progression, i);
+    }
+
+    cout << "\n================================\n";
+    cout << "1000 MIDI FILES GENERATED\n";
+    cout << "Location: DeepHouseMIDI/\n";
+    cout << "Tempo: 122 BPM\n";
+    cout << "Time Signature: 4/4\n";
+    cout << "Keys: 12 Minor Keys\n";
+    cout << "================================\n";
 
     return 0;
 }
