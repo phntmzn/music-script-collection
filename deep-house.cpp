@@ -29,7 +29,6 @@ struct Key {
     string folder;
     int root;
     int signature;
-    bool flats;
 };
 
 struct Chord {
@@ -46,18 +45,18 @@ struct Event {
 
 // 12 minor keys and their MIDI key signatures.
 vector<Key> keys = {
-    {"A Minor",       "A_Minor",       9,   0, false},
-    {"Bb Minor",      "Bb_Minor",     10,  -5, true},
-    {"B Minor",       "B_Minor",      11,   2, false},
-    {"C Minor",       "C_Minor",       0,  -3, true},
-    {"C# Minor",      "CSharp_Minor",  1,   4, false},
-    {"D Minor",       "D_Minor",       2,  -1, true},
-    {"Eb Minor",      "Eb_Minor",      3,  -6, true},
-    {"E Minor",       "E_Minor",       4,   1, false},
-    {"F Minor",       "F_Minor",       5,  -4, true},
-    {"F# Minor",      "FSharp_Minor",  6,   3, false},
-    {"G Minor",       "G_Minor",       7,  -2, true},
-    {"Ab Minor",      "Ab_Minor",      8,  -7, true}
+    {"A Minor",       "A_Minor",       9,   0},
+    {"Bb Minor",      "Bb_Minor",     10,  -5},
+    {"B Minor",       "B_Minor",      11,   2},
+    {"C Minor",       "C_Minor",       0,  -3},
+    {"C# Minor",      "CSharp_Minor",  1,   4},
+    {"D Minor",       "D_Minor",       2,  -1},
+    {"Eb Minor",      "Eb_Minor",      3,  -6},
+    {"E Minor",       "E_Minor",       4,   1},
+    {"F Minor",       "F_Minor",       5,  -4},
+    {"F# Minor",      "FSharp_Minor",  6,   3},
+    {"G Minor",       "G_Minor",       7,  -2},
+    {"Ab Minor",      "Ab_Minor",      8,  -7}
 };
 
 const int scale[] = {
@@ -89,23 +88,30 @@ const vector<vector<int>> progressions = {
     {5, 6, 0, 3}
 };
 
-const string sharpNames[] = {
-    "C", "C#", "D", "D#", "E", "F",
-    "F#", "G", "G#", "A", "A#", "B"
-};
-
-const string flatNames[] = {
-    "C", "Db", "D", "Eb", "E", "F",
-    "Gb", "G", "Ab", "A", "Bb", "B"
-};
+// Letter names and the natural pitch class of each.
+const string letterNames = "CDEFGAB";
+const int naturalPc[] = {0, 2, 4, 5, 7, 9, 11};
 
 string chordName(const Key& key, int degree) {
 
     int pc = (key.root + scale[degree]) % 12;
 
-    string root = key.flats
-        ? flatNames[pc]
-        : sharpNames[pc];
+    // Spell the root by letter, so each scale degree keeps its
+    // letter name (Cb rather than B, Fb rather than E).
+    int tonic = static_cast<int>(letterNames.find(key.name[0]));
+    int letter = (tonic + degree) % 7;
+
+    int accidental = (pc - naturalPc[letter] + 12) % 12;
+
+    if (accidental > 6)
+        accidental -= 12;
+
+    string root(1, letterNames[letter]);
+
+    if (accidental > 0)
+        root += string(accidental, '#');
+    else if (accidental < 0)
+        root += string(-accidental, 'b');
 
     return root + chordTypes[degree].name;
 }
